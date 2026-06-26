@@ -131,6 +131,11 @@
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--aqua);box-shadow:0 0 0 3px rgba(0,180,216,.18)}
   .reading{font-family:var(--mono);font-size:20px;letter-spacing:.5px}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .fuelseg{display:grid;grid-template-columns:repeat(8,1fr);gap:5px}
+  .fuelbtn{height:var(--tap);min-height:50px;border:1px solid var(--line);background:var(--card);border-radius:11px;font-family:var(--mono);font-size:13px;font-weight:700;color:var(--muted);cursor:pointer;padding:0;transition:background .12s,color .12s,border-color .12s,transform .04s}
+  .fuelbtn:active{transform:translateY(1px)}
+  .fuelbtn.on{background:var(--aqua);border-color:var(--aqua);color:#02141A}
+  .fuelends{display:flex;justify-content:space-between;margin-top:6px;padding:0 2px;font-size:11px;font-weight:800;color:var(--muted);letter-spacing:1px}
   .card-block{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
   .card-block > h3{margin:0 0 14px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
 
@@ -197,6 +202,15 @@
   .media-grid .cell{border-radius:12px;overflow:hidden;background:#000;aspect-ratio:3/4;position:relative}
   .media-grid .cell img,.media-grid .cell video{width:100%;height:100%;object-fit:cover}
   .media-grid .cell .tag{position:absolute;left:6px;bottom:6px;font-family:var(--mono);font-size:10px;color:#fff;background:rgba(0,0,0,.6);padding:2px 6px;border-radius:5px}
+  .dlbtn{position:absolute;top:6px;right:6px;width:32px;height:32px;border:none;border-radius:9px;background:rgba(0,0,0,.62);color:#fff;font-size:17px;font-weight:800;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .dlbtn:active{background:var(--aqua);color:#02141A}
+  .gallhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .gallhead b{display:block;font-size:15px;color:var(--ink)} .gallhead small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+  .btn.small{height:auto;min-height:0;padding:9px 13px;font-size:13px;width:auto;flex:0 0 auto}
+  .media-grid .gcell{aspect-ratio:auto;background:var(--card);border:1px solid var(--line)}
+  .media-grid .gcell img,.media-grid .gcell video{aspect-ratio:3/4;background:#000}
+  .gcap{padding:8px 9px 10px}
+  .gcap b{display:block;font-size:12.5px;color:var(--ink);line-height:1.25} .gcap small{display:block;font-size:11px;color:var(--muted);margin:2px 0 3px}
   .compare-col h4{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:0 0 8px}
   .flagbar{background:#FFF4EF;border:1px solid #FFD9C9;border-radius:12px;padding:12px 14px;font-size:13px;color:#9A3412;display:flex;align-items:center;gap:8px;margin-bottom:16px}
 
@@ -263,7 +277,10 @@ const CONFIG = {
   videoBitsPerSecond: 2_000_000, // ~2 Mbps -> a 30s clip is ~7-8 MB
   maxPhotoEdge: 1600,          // downscale photos to this longest edge
   photoQuality: 0.7,
-  r2: null                     // set later: { endpoint, ... } to turn on cloud backup
+  r2: null,                    // set later: { endpoint, ... } to turn on cloud backup
+  notifyEmail: "FCRutah@gmail.com",  // damage flags go here
+  notifyEndpoint: null,        // set to a Formspree/webhook URL to send the alert automatically; otherwise opens a pre-filled email
+  fleetQueueKey: "fcr_inspect_pending" // shared with FCR Fleet: units to mark Down on its next open
 };
 
 /* ---------------- tiny helpers ---------------- */
@@ -472,7 +489,10 @@ async function renderHome(){
     recent.slice(0,6).forEach(i=>list.append(itemRow(i)));
     main.append(list);
   }
-  action(el("button",{class:"btn ghost",onclick:()=>go("units")},el("span",{class:"ico"},"🛥️"),"Fleet & history"));
+  action(
+    el("button",{class:"btn ghost",onclick:()=>go("gallery")},el("span",{class:"ico"},"📁"),"Photos & videos"),
+    el("button",{class:"btn ghost",onclick:()=>go("units")},el("span",{class:"ico"},"🛥️"),"Fleet & history")
+  );
 }
 
 function itemRow(i){
@@ -570,12 +590,22 @@ async function renderNew(){
     el("input",{type:"text",value:DRAFT.customerContact,placeholder:"To send them the record",oninput:e=>DRAFT.customerContact=e.target.value})));
 
   // readings
-  main.append(el("div",{class:"two"},
-    el("div",{class:"field"}, el("label",{},"Hours / meter"),
-      el("input",{type:"number",inputmode:"decimal",class:"reading",value:DRAFT.hours,placeholder:"0.0",oninput:e=>DRAFT.hours=e.target.value})),
-    el("div",{class:"field"}, el("label",{},"Fuel %"),
-      el("input",{type:"number",inputmode:"numeric",class:"reading",value:DRAFT.fuel,placeholder:"100",oninput:e=>DRAFT.fuel=e.target.value}))
+  main.append(el("div",{class:"field"}, el("label",{},"Hours / meter"),
+    el("input",{type:"number",inputmode:"decimal",class:"reading",value:DRAFT.hours,placeholder:"0.0",oninput:e=>DRAFT.hours=e.target.value})));
+
+  // fuel — tap the gauge in eighths (8/8 = full)
+  const fuelRow=el("div",{class:"fuelseg"});
+  const EIGHTHS=["1/8","2/8","3/8","4/8","5/8","6/8","7/8","8/8"];
+  const paintFuel=()=>[...fuelRow.children].forEach(b=>b.classList.toggle("on", b.getAttribute("data-v")===DRAFT.fuel));
+  EIGHTHS.forEach(v=> fuelRow.append(
+    el("button",{type:"button",class:"fuelbtn","data-v":v,onclick:()=>{ DRAFT.fuel = (DRAFT.fuel===v?"":v); paintFuel(); }}, v)
   ));
+  main.append(el("div",{class:"field"},
+    el("label",{},"Fuel ",el("span",{class:"hint"},"(tap the gauge — 8/8 = full)")),
+    fuelRow,
+    el("div",{class:"fuelends"}, el("span",{},"E"), el("span",{},"F"))
+  ));
+  paintFuel();
   main.append(el("div",{class:"banner"},"📸 Snap a quick photo of the gauges during capture so the readings are backed up — no arguing later about what was written down."));
 
   action(
@@ -677,7 +707,7 @@ async function renderCapture(){
 /* ---------- SIGN + SAVE ---------- */
 async function renderSign(){
   const main=$("#main"); main.innerHTML="";
-  main.append(el("h1",{class:"screen"},"Notes & sign-off"));
+  main.append(el("h1",{class:"screen"},"Notes & save"));
 
   main.append(el("div",{class:"field"}, el("label",{},"Condition notes ",el("span",{class:"hint"},"(damage, fuel, anything worth flagging)")),
     el("textarea",{placeholder:"e.g. small scuff starboard rear, returned full",oninput:e=>DRAFT.notes=e.target.value}, DRAFT.notes||"")));
@@ -688,20 +718,6 @@ async function renderSign(){
     el("div",{}, el("b",{},"Flag for a damage claim"),
       el("small",{},"Keeps this record's video & photos forever instead of auto-clearing after "+CONFIG.retentionDays+" days."))));
 
-  main.append(el("div",{class:"field"}, el("label",{},"Customer signature"),
-    (()=>{ const wrap=el("div",{class:"sig-wrap"});
-      const c=el("canvas",{class:"sig"});
-      const clr=el("button",{class:"clear"},"Clear");
-      const base=el("div",{class:"sig-base"},"Sign above");
-      wrap.append(c,clr,base);
-      main._sig=null;
-      setTimeout(()=>{ main._sig=initSig(c); clr.addEventListener("click",()=>main._sig.clear()); },0);
-      return wrap;
-    })()
-  ));
-  main.append(el("div",{class:"field"}, el("label",{},"Signed by (printed name)"),
-    el("input",{type:"text",value:DRAFT.signerName||DRAFT.customerName,placeholder:"Name",oninput:e=>DRAFT.signerName=e.target.value})));
-
   action(
     el("button",{class:"btn secondary",onclick:()=>go("capture")},"Back"),
     el("button",{class:"btn",onclick:()=>saveInspection(main)}, el("span",{class:"ico"},"✅"),"Save record")
@@ -709,12 +725,9 @@ async function renderSign(){
 }
 
 async function saveInspection(main){
-  const sig = main._sig ? main._sig.dataUrl() : null;
   const now=Date.now();
   const record={
     ...DRAFT,
-    signerName:(DRAFT.signerName||DRAFT.customerName||"").trim(),
-    signatureDataUrl:sig,
     createdAt:now,
     createdBy:DEVICE_ID,
     mediaCount:captured.length,
@@ -731,9 +744,65 @@ async function saveInspection(main){
   captured.forEach(c=>URL.revokeObjectURL(c.thumbUrl));
   captured.length=0; DRAFT=null;
 
-  toast("Saved on device ✓");
+  // damage flagged -> alert the office + flag the unit Down in FCR Fleet
+  if(record.keepForClaim){
+    queueFleetDown(record);
+    notifyDamage(record);
+    toast("Saved \u00b7 damage flagged \u2691");
+  } else {
+    toast("Saved on device \u2713");
+  }
   syncNow();
   go("record",{id:record.id});
+}
+
+/* ---------- damage alert + inventory flag ---------- */
+function damageText(insp){
+  return [
+    "DAMAGE FLAGGED \u2014 First Class Rentals",
+    "",
+    "Unit: "+(insp.machineName||"Unit"),
+    "Stage: "+(insp.type==="checkout"?"Checkout":"Check-in"),
+    "Customer: "+(insp.customerName||"\u2014")+(insp.customerContact?" ("+insp.customerContact+")":""),
+    "When: "+fmtFull(insp.createdAt),
+    "Hours/meter: "+(insp.hours!==""?insp.hours:"\u2014")+"    Fuel: "+(insp.fuel!==""?insp.fuel:"\u2014"),
+    "Notes: "+(insp.notes||"\u2014"),
+    "",
+    (insp.mediaCount||0)+" video/photo item(s) saved in FCR Inspect (Photos & videos).",
+    "The unit has been flagged Down in FCR Fleet."
+  ].join("\n");
+}
+function openMailto(subject,body){
+  const url="mailto:"+encodeURIComponent(CONFIG.notifyEmail)+"?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+  const a=document.createElement("a"); a.href=url; document.body.appendChild(a); a.click(); a.remove();
+}
+async function notifyDamage(insp){
+  const subject="\u2691 Damage \u2014 "+(insp.machineName||"Unit")+" ("+(insp.customerName||"customer")+")";
+  const body=damageText(insp);
+  if(CONFIG.notifyEndpoint){
+    try{
+      await fetch(CONFIG.notifyEndpoint,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},
+        body:JSON.stringify({email:CONFIG.notifyEmail,_replyto:CONFIG.notifyEmail,subject:subject,message:body,
+          unit:insp.machineName,customer:insp.customerName,when:fmtFull(insp.createdAt)})});
+    }catch(e){ openMailto(subject,body); }
+  } else {
+    openMailto(subject,body);
+  }
+}
+function queueFleetDown(insp){
+  try{
+    const k=CONFIG.fleetQueueKey;
+    const q=JSON.parse(localStorage.getItem(k)||"[]");
+    q.push({
+      unitId:String(insp.machineId||""),
+      unitName:insp.machineName||"",
+      customer:insp.customerName||"",
+      when:insp.createdAt,
+      recordId:insp.id,
+      note:"Damage flagged via FCR Inspect"+(insp.customerName?(" \u2014 "+insp.customerName):"")+(insp.notes?(" \u2014 "+insp.notes):"")
+    });
+    localStorage.setItem(k,JSON.stringify(q));
+  }catch(e){}
 }
 
 /* ---------- RECORD VIEW ---------- */
@@ -754,8 +823,7 @@ async function renderRecord(){
   const kv=el("dl",{class:"kv"});
   const add=(k,v)=>{ kv.append(el("dt",{},k),el("dd",{}, v||"—")); };
   add("Hours / meter", insp.hours!==""?insp.hours:"—");
-  add("Fuel", insp.fuel!==""?insp.fuel+"%":"—");
-  add("Signed by", insp.signerName||"—");
+  add("Fuel", insp.fuel!==""?insp.fuel:"—");
   add("Media on file", (insp.mediaCount||0)+" item(s)");
   main.append(el("div",{class:"card-block"}, el("h3",{},"Details"), kv,
     insp.notes?el("p",{style:"margin:14px 0 0;font-size:14px;line-height:1.5;color:#27424C"}, "\u201C"+insp.notes+"\u201D"):null
@@ -777,11 +845,6 @@ async function renderRecord(){
     main.append(el("div",{class:"card-block"}, el("h3",{},"Captured media"), mediaGrid(media,2)));
   }
 
-  if(insp.signatureDataUrl){
-    main.append(el("div",{class:"card-block"}, el("h3",{},"Signature"),
-      el("img",{src:insp.signatureDataUrl,style:"width:100%;max-width:280px;background:#fff;border:1px solid var(--line);border-radius:10px"})));
-  }
-
   action(
     el("button",{class:"btn secondary",onclick:()=>go("home")},"Home"),
     el("button",{class:"btn",onclick:()=>shareRecord(insp)}, el("span",{class:"ico"},"📤"),"Share record")
@@ -797,9 +860,50 @@ function mediaGrid(media,cols){
     if(m.kind==="photo") cell.append(el("img",{src:url}));
     else cell.append(el("video",{src:url,controls:"",playsinline:""}));
     cell.append(el("span",{class:"tag"}, m.kind.toUpperCase()));
+    cell.append(el("button",{class:"dlbtn",title:"Download",onclick:e=>{e.stopPropagation();downloadBlob(m.blob,mediaFileName(m));}},"\u2193"));
     g.append(cell);
   });
   return g;
+}
+
+/* ---------- media download helpers ---------- */
+function extFor(m){ const t=(m.mime||"").split("/")[1]||""; if(t) return t.replace("quicktime","mov").split(";")[0]; return m.kind==="photo"?"jpg":"mp4"; }
+function safeName(s){ return (s||"").replace(/[^a-z0-9]+/gi,"-").replace(/^-+|-+$/g,"").slice(0,40)||"unit"; }
+function mediaFileName(m,unitName){
+  const d=new Date(m.createdAt||Date.now());
+  const stamp=d.getFullYear()+("0"+(d.getMonth()+1)).slice(-2)+("0"+d.getDate()).slice(-2)+"-"+("0"+d.getHours()).slice(-2)+("0"+d.getMinutes()).slice(-2)+("0"+d.getSeconds()).slice(-2);
+  return (unitName?safeName(unitName)+"_":"")+(m.kind||"media")+"_"+stamp+"_"+String(m.id).slice(-4)+"."+extFor(m);
+}
+function downloadBlob(blob,filename){
+  const url=URL.createObjectURL(blob);
+  const a=el("a",{href:url,download:filename}); document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+}
+function crc32(u8){
+  if(!crc32.t){ crc32.t=[]; for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); crc32.t[n]=c>>>0; } }
+  const t=crc32.t; let crc=0xFFFFFFFF;
+  for(let i=0;i<u8.length;i++) crc=(crc>>>8)^t[(crc^u8[i])&0xFF];
+  return (crc^0xFFFFFFFF)>>>0;
+}
+async function zipStore(files){ // files:[{name, blob}] -> store-only zip Blob
+  const enc=new TextEncoder();
+  const u16=v=>new Uint8Array([v&255,(v>>>8)&255]);
+  const u32=v=>new Uint8Array([v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255]);
+  const parts=[], central=[]; let offset=0;
+  for(const f of files){
+    const data=new Uint8Array(await f.blob.arrayBuffer());
+    const nameB=enc.encode(f.name);
+    const crc=crc32(data), size=data.length;
+    const lh=[new Uint8Array([0x50,0x4b,0x03,0x04]),u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(size),u32(size),u16(nameB.length),u16(0)];
+    lh.forEach(b=>parts.push(b)); parts.push(nameB,data);
+    const cd=[new Uint8Array([0x50,0x4b,0x01,0x02]),u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(size),u32(size),u16(nameB.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(offset)];
+    cd.forEach(b=>central.push(b)); central.push(nameB);
+    let lhLen=0; lh.forEach(b=>lhLen+=b.length);
+    offset += lhLen + nameB.length + size;
+  }
+  let cdSize=0; central.forEach(b=>cdSize+=b.length);
+  const eocd=[new Uint8Array([0x50,0x4b,0x05,0x06]),u16(0),u16(0),u16(files.length),u16(files.length),u32(cdSize),u32(offset),u16(0)];
+  return new Blob([...parts,...central,...eocd],{type:"application/zip"});
 }
 
 function shareRecord(insp){
@@ -808,10 +912,10 @@ function shareRecord(insp){
     insp.machineName,
     "Customer: "+(insp.customerName||"—"),
     "When: "+fmtFull(insp.createdAt),
-    "Hours/meter: "+(insp.hours!==""?insp.hours:"—")+"   Fuel: "+(insp.fuel!==""?insp.fuel+"%":"—"),
+    "Hours/meter: "+(insp.hours!==""?insp.hours:"—")+"   Fuel: "+(insp.fuel!==""?insp.fuel:"—"),
     insp.notes?("Notes: "+insp.notes):null,
     (insp.mediaCount||0)+" video/photo item(s) on file.",
-    "(Signed "+(insp.signerName||"—")+")"
+    insp.keepForClaim?"\u2691 Flagged for a damage claim.":null
   ].filter(Boolean);
   const text=lines.join("\n");
   if(navigator.share){ navigator.share({title:"FCR Inspection",text}).catch(()=>{}); }
@@ -872,9 +976,55 @@ function closeModal(){ $("#modal").classList.remove("open"); if(["home","history
 $("#modal").addEventListener("click",e=>{ if(e.target.id==="modal") closeModal(); });
 document.addEventListener("pointerdown",e=>{ if(!e.target.closest(".ac")) document.querySelectorAll(".ac-list").forEach(l=>l.classList.add("hidden")); });
 
+/* ---------- PHOTOS & VIDEOS (all media) ---------- */
+async function renderGallery(){
+  const main=$("#main"); main.innerHTML="";
+  main.append(el("h1",{class:"screen"},"Photos & videos"));
+  const [insps, media] = await Promise.all([DB.all("inspections"), DB.all("media")]);
+  const byId={}; insps.forEach(i=>byId[i.id]=i);
+  media.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  if(!media.length){
+    main.append(el("div",{class:"empty"},el("span",{class:"ico"},"\uD83D\uDCC1"),"No photos or videos yet. They land here the moment you capture during a checkout or check-in."));
+    action(el("button",{class:"btn secondary",onclick:()=>go("home")},"Home"));
+    return;
+  }
+  const photoN=media.filter(m=>m.kind==="photo").length, vidN=media.length-photoN;
+  main.append(el("div",{class:"gallhead"},
+    el("div",{}, el("b",{}, media.length+" item"+(media.length>1?"s":"")),
+      el("small",{}, photoN+" photo"+(photoN!==1?"s":"")+" \u00b7 "+vidN+" video"+(vidN!==1?"s":""))),
+    el("button",{class:"btn small",onclick:async ev=>{
+      const btn=ev.currentTarget, old=btn.textContent; btn.textContent="Zipping\u2026"; btn.disabled=true;
+      try{
+        const files=media.map(m=>({name:mediaFileName(m, byId[m.inspectionId]&&byId[m.inspectionId].machineName), blob:m.blob}));
+        const seen={}; files.forEach(f=>{ if(seen[f.name]){ const n=++seen[f.name]; f.name=f.name.replace(/(\.[^.]+)$/,"-"+n+"$1"); } else seen[f.name]=1; });
+        downloadBlob(await zipStore(files),"FCR-media-"+Date.now()+".zip");
+      }catch(e){ toast("Zip failed"); }
+      btn.textContent=old; btn.disabled=false;
+    }}, "\u2193 Download all")
+  ));
+  const g=el("div",{class:"media-grid"});
+  media.forEach(m=>{
+    const insp=byId[m.inspectionId]||{};
+    const url=URL.createObjectURL(m.blob);
+    const cell=el("div",{class:"cell gcell"});
+    if(m.kind==="photo") cell.append(el("img",{src:url}));
+    else cell.append(el("video",{src:url,controls:"",playsinline:""}));
+    cell.append(el("span",{class:"tag"}, m.kind.toUpperCase()));
+    cell.append(el("button",{class:"dlbtn",title:"Download",onclick:e=>{e.stopPropagation();downloadBlob(m.blob,mediaFileName(m,insp.machineName));}},"\u2193"));
+    cell.append(el("div",{class:"gcap"},
+      el("b",{}, insp.machineName||"Unit"),
+      el("small",{}, (insp.type==="checkout"?"Out":insp.type==="checkin"?"In":"\u2014")+" \u00b7 "+fmtTime(m.createdAt||insp.createdAt||Date.now())),
+      insp.id?el("button",{class:"link",style:"padding:2px 0;font-size:12px",onclick:()=>go("record",{id:insp.id})},"Open record \u2192"):null
+    ));
+    g.append(cell);
+  });
+  main.append(g);
+  action(el("button",{class:"btn secondary",onclick:()=>go("home")},"Home"));
+}
+
 /* ---------- render dispatch ---------- */
 function render(){
-  const map={home:renderHome,history:renderHistory,new:renderNew,capture:renderCapture,sign:renderSign,record:renderRecord,units:renderUnits,unit:renderUnit};
+  const map={home:renderHome,history:renderHistory,new:renderNew,capture:renderCapture,sign:renderSign,record:renderRecord,units:renderUnits,unit:renderUnit,gallery:renderGallery};
   (map[App.screen]||renderHome)();
 }
 
