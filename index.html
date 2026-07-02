@@ -4,6 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0B1F2A" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FCR Inspect" />
+<meta name="format-detection" content="telephone=no" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" type="image/png" href="icon-192.png" />
 <title>FCR Inspect</title>
 <style>
   :root{
@@ -37,6 +45,17 @@
     overscroll-behavior-y:none;
   }
   button{font-family:inherit}
+  button,.btn,.big,.item,.fuelbtn,.dlbtn,.shutter,.link,a,label.check{touch-action:manipulation}
+  button,.btn,.big,.fuelbtn,.dlbtn,.shutter{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+  .sheet,.media-grid,.app{-webkit-overflow-scrolling:touch}
+  @media (display-mode:standalone){ header.bar{padding-top:calc(env(safe-area-inset-top) + 6px)} }
+  /* Add-to-Home-Screen hint (iOS Safari, first run) */
+  .a2hs{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 12px);z-index:80;
+    background:var(--water);color:#EAF6F8;border-radius:14px;padding:13px 14px;display:flex;gap:11px;align-items:center;
+    box-shadow:0 12px 34px rgba(3,16,24,.34);font-size:13.5px;line-height:1.42;max-width:536px;margin:0 auto}
+  .a2hs b{color:#fff;font-weight:700}
+  .a2hs svg{width:19px;height:19px;vertical-align:-4px;margin:0 1px;flex:0 0 auto}
+  .a2hs .x{margin-left:auto;flex:0 0 auto;align-self:flex-start;background:rgba(255,255,255,.14);border:none;color:#EAF6F8;width:30px;height:30px;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer}
 
   /* ---------- App shell ---------- */
   .app{max-width:560px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
@@ -131,11 +150,10 @@
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--aqua);box-shadow:0 0 0 3px rgba(0,180,216,.18)}
   .reading{font-family:var(--mono);font-size:20px;letter-spacing:.5px}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .fuelseg{display:grid;grid-template-columns:repeat(8,1fr);gap:5px}
-  .fuelbtn{height:var(--tap);min-height:50px;border:1px solid var(--line);background:var(--card);border-radius:11px;font-family:var(--mono);font-size:13px;font-weight:700;color:var(--muted);cursor:pointer;padding:0;transition:background .12s,color .12s,border-color .12s,transform .04s}
+  .fuelseg{display:grid;grid-template-columns:repeat(8,1fr);gap:4px}
+  .fuelbtn{height:var(--tap);min-height:50px;border:1px solid var(--line);background:var(--card);border-radius:11px;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--muted);cursor:pointer;padding:0;transition:background .12s,color .12s,border-color .12s,transform .04s}
   .fuelbtn:active{transform:translateY(1px)}
   .fuelbtn.on{background:var(--aqua);border-color:var(--aqua);color:#02141A}
-  .fuelends{display:flex;justify-content:space-between;margin-top:6px;padding:0 2px;font-size:11px;font-weight:800;color:var(--muted);letter-spacing:1px}
   .card-block{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
   .card-block > h3{margin:0 0 14px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
 
@@ -238,6 +256,7 @@
   .ac-item small{color:var(--muted);font-size:12px}
   .ac-add{padding:13px 14px;cursor:pointer;color:var(--aqua);font-weight:700;background:#F4FBFD}
   .ac-add:active{background:#E6F6FA}
+  .ac-empty{padding:13px 14px;color:var(--muted);font-size:13px;line-height:1.4}
   .item.muted{opacity:.55}
 </style>
 </head>
@@ -279,7 +298,7 @@ const CONFIG = {
   photoQuality: 0.7,
   r2: null,                    // set later: { endpoint, ... } to turn on cloud backup
   notifyEmail: "FCRutah@gmail.com",  // damage flags go here
-  notifyEndpoint: null,        // set to a Formspree/webhook URL to send the alert automatically; otherwise opens a pre-filled email
+  notifyEndpoint: "https://cnk-booking-cc9e.vercel.app/api/fcr-damage", // headless email via your Vercel + Resend
   fleetQueueKey: "fcr_inspect_pending" // shared with FCR Fleet: units to mark Down on its next open
 };
 
@@ -531,9 +550,20 @@ async function renderNew(){
     linkedCheckoutId:null
   };
 
+  // current out/in state per unit (Record360-style): a unit's latest inspection decides.
+  // latest = checkout  -> still OUT (not returned);  latest = check-in -> IN (available)
+  const insps = await DB.all("inspections").catch(()=>[]);
+  const outSet = new Set();
+  { const byUnit={}; insps.forEach(i=>{ if(!i.machineId)return; (byUnit[i.machineId]=byUnit[i.machineId]||[]).push(i); });
+    for(const fid in byUnit){ const l=byUnit[fid].slice().sort((a,b)=>a.createdAt-b.createdAt); if(l[l.length-1].type==="checkout") outSet.add(fid); } }
+  // checkout: only units currently IN (returned).  check-in: only units currently OUT.
+  const pool = machines.filter(m=> type==="checkout" ? !outSet.has(m.fid) : outSet.has(m.fid));
+
   // ---- unit type-ahead (reads your FCR Fleet list) ----
   const acWrap=el("div",{class:"ac"});
-  const acInput=el("input",{type:"text",autocomplete:"off",placeholder:"Search your fleet — name, year, #",value:DRAFT.machineName||""});
+  const acInput=el("input",{type:"text",autocomplete:"off",inputmode:"numeric",
+    placeholder:type==="checkout"?"Search unit # (available units)":"Search unit # (units currently out)",
+    value:DRAFT.machineName||""});
   const acList=el("div",{class:"ac-list hidden"});
   acWrap.append(acInput,acList);
   main.append(el("div",{class:"field"}, el("label",{},"Unit ",el("span",{class:"hint"},"(from FCR Fleet)")), acWrap));
@@ -551,14 +581,23 @@ async function renderNew(){
         "No fleet loaded yet — open FCR Fleet to sync →"));
       acList.classList.remove("hidden"); return;
     }
-    const matches = ql==="" ? machines.slice()
-      : machines.filter(m=>(machineName(m)+" "+(m.type||"")+" "+(m.status||"")).toLowerCase().includes(ql));
-    matches.slice(0,10).forEach(m=>{
+    if(pool.length===0){
+      acList.append(el("div",{class:"ac-empty"}, type==="checkout"
+        ? "Every unit is currently checked out — nothing available to send out."
+        : "No units are currently out. Start a checkout before you can check one back in."));
+      acList.classList.remove("hidden"); return;
+    }
+    // match on unit NUMBER only, so typing "3" doesn't match every "GTI 130"
+    const matches = ql==="" ? pool.slice()
+      : pool.filter(m=>String(m.mid||"").toLowerCase().includes(ql));
+    if(matches.length===0){
+      acList.append(el("div",{class:"ac-empty"},"No unit # matches \u201c"+q.trim()+"\u201d in the "+(type==="checkout"?"available":"currently-out")+" list."));
+    }
+    matches.slice(0,12).forEach(m=>{
       acList.append(el("div",{class:"ac-item",onpointerdown:ev=>{ev.preventDefault();selectUnit(m);}},
-        el("b",{},machineName(m)), el("small",{}, m.type+(m.status&&m.status!=="available"?" · "+m.status:""))));
+        el("b",{}, m.mid?("#"+m.mid):machineName(m)),
+        el("small",{}, machineName(m)+(m.status&&m.status!=="available"?" \u00b7 "+m.status:""))));
     });
-    acList.append(el("div",{class:"ac-add",onpointerdown:ev=>{ev.preventDefault();window.open(FLEET_SRC.manageUrl,"_blank");}},
-      "Not here? Add it in FCR Fleet →"));
     acList.classList.remove("hidden");
   }
   acInput.addEventListener("input",e=>{ DRAFT.machineId=""; suggest(e.target.value); });
@@ -593,17 +632,16 @@ async function renderNew(){
   main.append(el("div",{class:"field"}, el("label",{},"Hours / meter"),
     el("input",{type:"number",inputmode:"decimal",class:"reading",value:DRAFT.hours,placeholder:"0.0",oninput:e=>DRAFT.hours=e.target.value})));
 
-  // fuel — tap the gauge in eighths (8/8 = full)
+  // fuel — tap the level (matches a dash gauge: E … F)
   const fuelRow=el("div",{class:"fuelseg"});
-  const EIGHTHS=["1/8","2/8","3/8","4/8","5/8","6/8","7/8","8/8"];
+  const FUEL=["E","1/4","3/8","1/2","5/8","3/4","7/8","F"];
   const paintFuel=()=>[...fuelRow.children].forEach(b=>b.classList.toggle("on", b.getAttribute("data-v")===DRAFT.fuel));
-  EIGHTHS.forEach(v=> fuelRow.append(
+  FUEL.forEach(v=> fuelRow.append(
     el("button",{type:"button",class:"fuelbtn","data-v":v,onclick:()=>{ DRAFT.fuel = (DRAFT.fuel===v?"":v); paintFuel(); }}, v)
   ));
   main.append(el("div",{class:"field"},
-    el("label",{},"Fuel ",el("span",{class:"hint"},"(tap the gauge — 8/8 = full)")),
-    fuelRow,
-    el("div",{class:"fuelends"}, el("span",{},"E"), el("span",{},"F"))
+    el("label",{},"Fuel ",el("span",{class:"hint"},"(tap the level)")),
+    fuelRow
   ));
   paintFuel();
   main.append(el("div",{class:"banner"},"📸 Snap a quick photo of the gauges during capture so the readings are backed up — no arguing later about what was written down."));
@@ -712,11 +750,16 @@ async function renderSign(){
   main.append(el("div",{class:"field"}, el("label",{},"Condition notes ",el("span",{class:"hint"},"(damage, fuel, anything worth flagging)")),
     el("textarea",{placeholder:"e.g. small scuff starboard rear, returned full",oninput:e=>DRAFT.notes=e.target.value}, DRAFT.notes||"")));
 
-  const chk=el("input",{type:"checkbox"}); chk.checked=DRAFT.keepForClaim;
-  chk.addEventListener("change",e=>DRAFT.keepForClaim=e.target.checked);
-  main.append(el("label",{class:"check"}, chk,
-    el("div",{}, el("b",{},"Flag for a damage claim"),
-      el("small",{},"Keeps this record's video & photos forever instead of auto-clearing after "+CONFIG.retentionDays+" days."))));
+  // Damage claims exist only on a return (check-in) — never on a checkout.
+  if(DRAFT.type==="checkin"){
+    const chk=el("input",{type:"checkbox"}); chk.checked=DRAFT.keepForClaim;
+    chk.addEventListener("change",e=>DRAFT.keepForClaim=e.target.checked);
+    main.append(el("label",{class:"check"}, chk,
+      el("div",{}, el("b",{},"Flag for a damage claim"),
+        el("small",{},"Keeps this record's video & photos forever instead of auto-clearing after "+CONFIG.retentionDays+" days."))));
+  } else {
+    DRAFT.keepForClaim=false;
+  }
 
   action(
     el("button",{class:"btn secondary",onclick:()=>go("capture")},"Back"),
@@ -1028,6 +1071,23 @@ function render(){
   (map[App.screen]||renderHome)();
 }
 
+/* ---------- iOS "Add to Home Screen" hint (first run, Safari only) ---------- */
+function maybeShowA2HS(){
+  try{
+    const ua=navigator.userAgent||"";
+    const isIOS=/iP(hone|ad|od)/.test(ua) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+    const standalone = window.navigator.standalone===true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    if(!isIOS || standalone) return;
+    if(localStorage.getItem("fcr_a2hs_done")) return;
+    const share='<svg viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M25 5v26M25 5l-8 8M25 5l8 8" stroke="#7FE3F0" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 21h-3a3 3 0 0 0-3 3v18a3 3 0 0 0 3 3h28a3 3 0 0 0 3-3V24a3 3 0 0 0-3-3h-3" stroke="#7FE3F0" stroke-width="3.4" stroke-linecap="round"/></svg>';
+    const bar=el("div",{class:"a2hs"});
+    bar.innerHTML='<div>Add <b>FCR Inspect</b> to your Home Screen for full-screen, one-tap access: tap '+share+' <b>Share</b>, then <b>Add to Home Screen</b>.</div>';
+    const x=el("button",{class:"x",onclick:()=>{ localStorage.setItem("fcr_a2hs_done","1"); bar.remove(); }},"\u00d7");
+    bar.append(x);
+    document.body.appendChild(bar);
+  }catch(e){}
+}
+
 /* ---------- boot ---------- */
 (async function boot(){
   setNet(navigator.onLine?"online":"off");
@@ -1035,6 +1095,7 @@ function render(){
   await runRetention().catch(()=>{});
   render();
   syncNow();
+  maybeShowA2HS();
 })();
 </script>
 </body>
